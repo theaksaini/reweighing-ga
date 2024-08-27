@@ -90,7 +90,7 @@ def calc_weights(X, y, sens_features_name):
     w = makehash()
     n = len(X)
     for r in tab.index:
-        key1 = str(r)
+        key1 = str(tuple(int(num) for num in r))
         row_sum = tab.loc[r].sum(axis=0)
         for c in tab.columns:
             key2 = str(c)
