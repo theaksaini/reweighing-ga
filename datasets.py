@@ -1,32 +1,32 @@
 import os
-#import lale.lib.aif360
+import lale
 from sklearn.model_selection import train_test_split
 import pandas as pd
-import sklearn
-import tpot2
 import pickle
+
+from lale.lib.aif360 import fetch_creditg_df
 
 def download_task(dataset_name, preprocess=True):
     
     cached_data_path = f"data/{dataset_name}_{preprocess}.pkl"
     print(cached_data_path)
     if not os.path.exists(cached_data_path):
-        load_df = getattr(lale.lib.aif360, 'fetch_'+dataset_name+'_df')
+        load_df = getattr(lale.lib.aif360.datasets, 'fetch_'+dataset_name+'_df')
         X, y, fairness_info =  load_df()
         print(fairness_info)
         l = fairness_info['protected_attributes']
         sens_names = [d['feature'] for d in l]
 
         print("Downloaded")
-    
-        #X, y, _, _ = dataset.get_data(target="class", dataset_format="dataframe")
+        X.reset_index(drop=True)
+        y.reset_index(drop=True)
+        
         print(X.shape)
         print(y.shape)
-        print(X.head(20))
-
-        print("Trainig and testing partitons downloaded")
+        print(X.head(10))
 
         if preprocess:
+            # Minimal preprocessing
 
             if dataset_name=='compas_violent':
                 # Identify the date columns
@@ -41,38 +41,29 @@ def download_task(dataset_name, preprocess=True):
             for col in X:
                 if len(X[col].unique())==1:
                     X = X.drop(col, axis=1)
-
-            print("After dropping", list(X.columns))
-
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
-            
+        
             # If any sensitive feature column contains continuous values (e.g. age), bin it.
             if 'age' in sens_names:
                 bin_edges = [0, 18, 35, 50, float('inf')]  # Define your desired age bins
                 bin_labels = ['0-18', '19-35', '36-50', '51+']  # Labels for the bins
             
                 # Create a new column 'age_group' based on the bins
-                X_train['age'] = pd.cut(X_train['age'], bins=bin_edges, labels=bin_labels, right=False)
-                X_test['age'] = pd.cut(X_test['age'], bins=bin_edges, labels=bin_labels, right=False)
-
-            preprocessing_pipeline = sklearn.pipeline.make_pipeline(tpot2.builtin_modules.ColumnSimpleImputer("categorical", strategy='most_frequent'), tpot2.builtin_modules.ColumnSimpleImputer("numeric", strategy='mean'), tpot2.builtin_modules.ColumnOneHotEncoder("categorical", min_frequency=0.001, handle_unknown="ignore"))
-            X_train = preprocessing_pipeline.fit_transform(X_train)
-            X_test = preprocessing_pipeline.transform(X_test)
-            
-            #le = sklearn.preprocessing.LabelEncoder()
-            #y_train = le.fit_transform(y_train)
-            #y_test = le.transform(y_test)
+                X['age'] = pd.cut(X['age'], bins=bin_edges, labels=bin_labels, right=False)
+               
             fav_label = fairness_info["favorable_labels"][0]
-            y_train = pd.Series([1 if y==fav_label else 0 for y in y_train])
-            y_test = pd.Series([1 if y==fav_label else 0 for y in y_test])
+            print("Before")
+            print(y.head(20))
+            y = pd.Series([1 if y==fav_label else 0 for y in y])
+            print("After")
+            print(y.head(20))
+           
+            features = X.columns
 
-            features = X_train.columns
-
-            sens_features = [x for x in list(features) if ''.join(x.split("_")[:-1]) in sens_names]
             print("All features", features)
-            print("Sensitive features", sens_features)
+            print("Sensitive features", sens_names)
 
-            d = {"X_train": X_train, "y_train": y_train, "X_test": X_test, "y_test": y_test, "features":features, "sens_features":sens_features}
+            assert y.index.equals(X.index), "Indices of y and sensitive_columns do not match."
+            d = {"X": X, "y": y, "features":features, "sens_features":sens_names}
             if not os.path.exists("data"):
                 os.makedirs("data")
             with open(cached_data_path, "wb") as f:
@@ -142,11 +133,10 @@ def download_pmad_task(dataset_name, outcome_name, preprocess=True):
 
 if __name__ == '__main__':
     #not_able_to_download = ['meps19', 'meps21', 'meps20',]
-    #datasets_binary = ['ricci', 'heart_disease', 'student_math', 'student_por', 'creditg', 'titanic', 'us_crime', 'compas_violent', 'nlsy', 'compas',
-    #        'speeddating',  'law_school', 'default_credit', 'bank', 'adult']
-    #for ds in datasets_binary:
-    #    download_task(ds)
-    #download_task('default_credit')
+    datasets_binary = ['ricci', 'heart_disease', 'student_math', 'student_por', 'creditg', 'titanic', 'us_crime', 'compas_violent', 'nlsy', 'compas',
+            'speeddating',  'law_school', 'default_credit', 'bank', 'adult']
+    for ds in datasets_binary:
+        download_task(ds)
     download_pmad_task('pmad_phq','PHQ9_risk2')
     download_pmad_task('pmad_epds','EPDS_risk2')
 

@@ -1,13 +1,10 @@
 from sklearn.preprocessing import StandardScaler
-from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 import networkx as nx
 import tpot2
 import sklearn
 from sklearn import metrics
-import sys
-import argparse
 import numpy as np
 import pandas as pd
 import os
@@ -29,8 +26,15 @@ def makehash():
 Config.warnings['not_compiled'] = False
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
-from imblearn.under_sampling import RandomUnderSampler
 
+from fairlearn.metrics import demographic_parity_difference
+
+def demographic_parity_difference(y, y_pred, X, sens_features):
+    y_true = [0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+    y_pred = [0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 0]
+    sf_data = ['b', 'b', 'a', 'b', 'b', 'c', 'c', 'c', 'a', 'a', 'c', 'a', 'b', 'c', 'c', 'b', 'c', 'c']
+    
+    return demographic_parity_difference(y_true, y_pred, sensitive_features=sf_data)
 
 def binary_to_decimal(list_of_nums):
     list_of_nums = [str(int(x)) for x in list_of_nums]
@@ -38,13 +42,17 @@ def binary_to_decimal(list_of_nums):
     return decimal_value
 
 def partial_to_full_sample_weight(partial_weights, X, y, sens_features):
+    assert y.index.equals(X.index), "Indices of y and sensitive_columns do not match."
     sensitive_columns = X.loc[:, sens_features]
+    print("Sensitive Columns", sensitive_columns)
+    print("y_train", y)
     sensitive_columns['target'] = y
+    print("Sensitive Columns", sensitive_columns)
     all_indices= sensitive_columns[sens_features+['target']].apply(binary_to_decimal, axis=1)
     all_indices = all_indices.to_numpy()
     return np.array(partial_weights[all_indices])
 
-def fitness_func(sample_weight, model, X, y, sens_features, f_metric, seed):
+def fitness_func_kfold(sample_weight, model, X, y, sens_features, f_metric, seed):
     '''
     model: fittend model or pipeline
     X_prime: subset of X data frame contatining sensitive columns
@@ -68,6 +76,59 @@ def fitness_func(sample_weight, model, X, y, sens_features, f_metric, seed):
         f_val.append(f_metric(y_test, y_proba, X_prime, grouping = 'intersectional', abs_val = True, gamma = True))
 
     return np.mean(auroc), np.mean(f_val)
+
+def fitness_func_holdout(sample_weight, model, X_train, y_train, X_val, y_val, sens_features, objective_fuctions, objective_functions_weights):
+    '''
+    model: fittend model or pipeline
+    sen_features: list of senstive features
+    objective_fuctions: list of objective functions
+    objective_functions_weights: list of weights for each objective function
+    '''
+    
+    sample_weights_full = partial_to_full_sample_weight(sample_weight, X_train, y_train, sens_features)
+
+    model.fit(sample_weight=sample_weights_full, X=X_train, y=y_train)
+
+    scores = evaluate_objective_functions(model, X_val, y_val, objective_fuctions, sens_features)
+
+    return [scores[objective_fuctions[i]]*objective_functions_weights[i] for i in range(len(objective_fuctions))]
+
+def learn_sel_fair_split(X, y, sens_features, seed, split_frac):
+    # Get unique combinations of Sensitive Features
+    partitions = X.groupby(sens_features)
+    
+    # Initialize an empty list to store the samples
+    X_select_dfs = []
+    X_learn_dfs  = []
+
+    # Loop through each partition and sample 
+    for _, partition in partitions:
+        # Sample the required percentage of the partition, with 'frac' controlling the fraction
+        select = partition.sample(frac=split_frac, random_state=seed)  # Using random_state for reproducibility
+        if select.empty:
+            partition.sample(n=1, random_state=seed)  # Select at least one observation from the group
+        learn = partition.drop(select.index)
+        X_select_dfs.append(select)
+        X_learn_dfs.append(learn)
+       
+    # Combine all sampled partitions into a single dataframe
+    X_select_df = pd.concat(X_select_dfs)
+    X_learn_df = pd.concat(X_learn_dfs)
+    
+    return X_learn_df, X_select_df, y.loc[X_learn_df.index], y.loc[X_select_df.index]
+
+
+def fitness_func_lexidate(sample_weight, model, X_learn, y_learn, X_select, y_select, sens_features):
+    '''
+    model: fittend model or pipeline
+    X_prime: subset of X data frame contatining sensitive columns
+    '''
+    sample_weights = partial_to_full_sample_weight(sample_weight, X_learn, y_learn, sens_features)
+    
+    model.fit(sample_weight=sample_weights, X=X_learn, y=y_learn)
+    y_pred = model.predict(X_select)
+
+    return (y_pred==y_select).astype(int).to_list()
 
 def calc_weights(X, y, sens_features_name):
     ''' Calculate sample weights according to calculationg given in 
@@ -123,16 +184,38 @@ def fairnes_metric(graph_pipeline, X, y, metric, X_prime):
     X_prime = X_prime.iloc[y.index]
     return metric(y, y_proba, X_prime, grouping = 'intersectional', abs_val = True, gamma = True)
 
-def load_task(dataset_name, preprocess=True):
-
-    if dataset_name.split('_')[-1]=='rus':
-        dataset_name = "_".join(dataset_name.split('_')[:-1])
-
-    cached_data_path = f"data/{dataset_name}_{preprocess}.pkl"
+def load_task(data_dir, dataset_name, test_size, seed, preprocess=True):
+    
+    cached_data_path = f"{data_dir}/{dataset_name}_{preprocess}.pkl"
     print(cached_data_path)
     
-    d = pickle.load(open(cached_data_path, "rb"))
-    X_train, y_train, X_test, y_test, features, sens_features = d['X_train'], d['y_train'], d['X_test'], d['y_test'], d['features'], d['sens_features']
+    with open(cached_data_path,'rb') as file:
+        d = pd.read_pickle(file)
+    X, y, features, sens_features = d['X'], d['y'], d['features'], d['sens_features']
+    X.reset_index(drop=True, inplace=True)
+    y.reset_index(drop=True, inplace=True)
+
+    X_train_pre, X_test_pre, y_train_pre, y_test_pre = train_test_split(X, y, test_size=test_size, random_state=seed)
+    X_train_pre, y_train_pre = X_train_pre.sort_index(), y_train_pre.sort_index()
+    X_test_pre, y_test_pre = X_test_pre.sort_index(), y_test_pre.sort_index()
+
+    preprocessing_pipeline = sklearn.pipeline.make_pipeline(tpot2.builtin_modules.ColumnSimpleImputer("categorical", strategy='most_frequent'), tpot2.builtin_modules.ColumnSimpleImputer("numeric", strategy='mean'), tpot2.builtin_modules.ColumnOneHotEncoder("categorical", min_frequency=0.001, handle_unknown="ignore"))
+    X_train = preprocessing_pipeline.fit_transform(X_train_pre)
+    X_train.index = X_train_pre.index
+    y_train = pd.Series(y_train_pre, index=y_train_pre.index)
+
+    X_test = preprocessing_pipeline.transform(X_test_pre)
+    X_test.index = X_test_pre.index
+    y_test = pd.Series(y_test_pre, index=y_test_pre.index)
+    
+    features = X_train.columns
+
+    sens_features = [x for x in list(features) if ''.join(x.split("_")[:-1]) in sens_features] # one hot encoded features can be slighly different
+    print("All features", features)
+    print("Sensitive features", sens_features)
+
+    assert y_train.index.equals(X_train.index), "Indices of y_train and X_train do not match."
+    assert y_test.index.equals(X_test.index), "Indices of y_test and X_test do not match."
 
     return X_train, y_train, X_test, y_test, features, sens_features
 
@@ -172,443 +255,48 @@ def front(obj1,obj2):
             compare = check_dominance(p,q)
             if compare == 1:
                 dom.append(j)
-#                 print(p,'dominates',q)
             elif compare == -1:
                 dcount = dcount +1
-#                 print(p,'dominated by',q)
 
         if dcount == 0:
-#             print(p,'is on the front')
             front.append(i)
 
-#     f_obj1 = [obj1[f] for f in front]
     f_obj2 = [obj2[f] for f in front]
-#     s1 = np.argsort(np.array(f_obj1))
     s2 = np.argsort(np.array(f_obj2))
-#     front = [front[s] for s in s1]
     front = [front[s] for s in s2]
 
     return front
 
-def score(est, X, y, sens_features=None, f_metric=None):
+def evaluate_objective_functions(est, X, y,  objective_functions=None, sens_features=None):
     try:
         check_is_fitted(est)
     except NotFittedError as exc:
         print(f"Model is not fitted yet.")
-
-    try:
-        this_auroc_score = sklearn.metrics.get_scorer("roc_auc_ovr")(est, X, y)
-    except:
-        y_preds = est.predict(X)
-        y_preds_onehot = sklearn.preprocessing.label_binarize(y_preds, classes=est.fitted_pipeline_.classes_)
-        this_auroc_score = metrics.roc_auc_score(y, y_preds_onehot, multi_class="ovr")
-    
-    try:
-        this_logloss = sklearn.metrics.get_scorer("neg_log_loss")(est, X, y)*-1
-    except:
-        y_preds = est.predict(X)
-        y_preds_onehot = sklearn.preprocessing.label_binarize(y_preds, classes=est.fitted_pipeline_.classes_)
-        this_logloss = metrics.log_loss(y, y_preds_onehot)
-
-    this_accuracy_score = sklearn.metrics.get_scorer("accuracy")(est, X, y)
-    this_balanced_accuracy_score = sklearn.metrics.get_scorer("balanced_accuracy")(est, X, y)
-
-    if sens_features is not None and f_metric is not None:
-        y_proba = est.predict_proba(X)[:,1]
-        X_prime = X.loc[:, sens_features] 
-        this_f_score = f_metric(y, y_proba, X_prime, grouping = 'intersectional', abs_val = True, gamma = True)
-    else:
-        this_f_score =  None
-
-    return { "auroc": this_auroc_score,
-            "accuracy": this_accuracy_score,
-            "balanced_accuracy": this_balanced_accuracy_score,
-            "logloss": this_logloss,
-            "fairness": this_f_score
-    }
-
-
-def loop_through_tasks(ml_models, experiments, task_id_lists, base_save_folder, num_runs, f_metric, ga_params):
-    for m, ml in enumerate(ml_models):
-        for t, taskid in enumerate(task_id_lists):
-            for run in range(num_runs):
-                for e, exp in enumerate(experiments):
-                    save_folder = f"{base_save_folder}/{ml}/{taskid}_{exp}_{run}"
-                    time.sleep(random.random()*5)
-                    if not os.path.exists(save_folder):
-                        os.makedirs(save_folder)
-                    else:
-                        continue
-
-                    print("working on ")
-                    print(save_folder)
-
-                    try: 
-
-                        print("loading data")
-                        X_train, y_train, X_test, y_test, features, sens_features = load_task(taskid)
-                        print("Training data: ", X_train, y_train)
-
-                        print("starting ml")
-                        seed = m+t+run+e
-                        
-                        est = ml(random_state=seed)
-                        print(ml, est, type(est))
-                        
-                        start = time.time()
-                        
-                        print("Starting the fitting process. ")
-                        if exp=='No Weights':
-                            est.fit(X_train, y_train)
-                        elif exp=='Calculated Weights':
-                            weights =  calc_weights(X_train, y_train, sens_features)
-                            est.fit(X_train, y_train, weights)
-                        else:
-                            ga_func = partial(fitness_func, model = ml(random_state=seed), X=X_train, y=y_train, sens_features=sens_features, f_metric=subgroup_FNR_loss, seed=seed)
-                            ga_func.__name__ = 'ga_func'
-                            ga = GA(ind_size = 2**(len(sens_features)+ 1), random_state=seed, **ga_params)
-                            ga.optimize(fn=ga_func)
-                            
-                            #Retrieve  
-                            print(ga.best_individual.program, ga.best_individual.fitness)
-
-                            weights = partial_to_full_sample_weight(ga.best_individual.program, X_train, y_train, sens_features)
-                            est.fit(X_train, y_train, sample_weight=weights)
-
-
-
-                        print("Ending the fitting process. ")
-
-                        duration = time.time() - start
-
-                        train_score = score(est, X_train, y_train, sens_features, f_metric)
-                        test_score = score(est, X_test, y_test, sens_features, f_metric)
-
-                        print("Ending the scoring process. ")
-
-                        all_scores = {}
-                        train_score = {f"train_{k}": v for k, v in train_score.items()}
-                        all_scores.update(train_score)
-                        all_scores.update(test_score)
-
-                        all_scores["start"] = start
-                        all_scores["taskid"] = taskid
-                        all_scores["exp_name"] = exp
-                        all_scores["duration"] = duration
-                        all_scores["run"] = run
-
-                        with open(f"{save_folder}/scores.pkl", "wb") as f:
-                            pickle.dump(all_scores, f)
-
-                        return
-                    except Exception as e:
-                        trace =  traceback.format_exc()
-                        pipeline_failure_dict = {"taskid": taskid, "exp_name": exp, "run": run, "error": str(e), "trace": trace}
-                        print("failed on ")
-                        print(save_folder)
-                        print(e)
-                        print(trace)
-
-                        with open(f"{save_folder}/failed.pkl", "wb") as f:
-                            pickle.dump(pipeline_failure_dict, f)
-
-                        return
-    
-    print("all finished")
-
-def loop_with_equal_evals(ml_models, experiments, task_id_lists, base_save_folder, num_runs, f_metric, ga_params):
-    for m, ml in enumerate(ml_models):
-        for t, taskid in enumerate(task_id_lists):
-            for e, exp in enumerate(experiments):
-
-                save_folder = f"{base_save_folder}/{ml}/{taskid}_{exp}"
-                time.sleep(random.random()*5)
-                if not os.path.exists(save_folder):
-                    os.makedirs(save_folder)
-                else:
-                    continue
-
-                print("working on ")
-                print(save_folder)
-
-                print("loading data")
-                X_train, y_train, X_test, y_test, features, sens_features = load_task(taskid)
-                print("Training data: ", X_train, y_train)
-
-                print("starting ml")
-                seed = m+t+e*100
-                                
-                try:  
-                
-                    start = time.time()
-                            
-                    print("Starting the fitting process. ")
-                    if exp=='No Weights':
-                        num_evals = num_runs*ga_params['pop_size']*ga_params['max_gens']
-                        scores = pd.DataFrame(columns = ['taskid','exp_name','seed','auroc', 'accuracy', 'balanced_accuracy', 'fairness', 'train_auroc', 'train_accuracy', 
-                                                        'train_balanced_accuracy', 'train_fairness'])
-                        rng = np.random.default_rng(seed)
-                        rints = rng.integers(low=0, high=10000, size=num_evals)
-                        for i in range(num_evals):
-                            est = ml(random_state=rints[i])
-                            est.fit(X_train, y_train)
-                            print("Ending the fitting process. ")
-
-                            train_score = score(est, X_train, y_train, sens_features, f_metric)
-                            test_score = score(est, X_test, y_test, sens_features, f_metric)
-
-                            print("Ending the scoring process. ")
-
-                            this_score = {}
-                            train_score = {f"train_{k}": v for k, v in train_score.items()}
-                            this_score.update(train_score)
-                            this_score.update(test_score)
-
-                            this_score["taskid"] = taskid
-                            this_score["exp_name"] = exp
-                            this_score["seed"] = rints[i]
-
-                            scores.loc[len(scores.index)] = this_score  
-
-                        with open(f"{save_folder}/scores.pkl", "wb") as f:
-                            pickle.dump(scores, f)
-
-                        
-                    elif exp=='Calculated Weights':
-                        num_evals = num_runs*ga_params['pop_size']*ga_params['max_gens']
-                        weights =  calc_weights(X_train, y_train, sens_features)
-                        scores = pd.DataFrame(columns = ['taskid','exp_name','seed','auroc', 'accuracy', 'balanced_accuracy', 'fairness', 'train_auroc', 'train_accuracy', 
-                                                        'train_balanced_accuracy', 'train_fairness'])
-                        rng = np.random.default_rng(seed)
-                        rints = rng.integers(low=0, high=10000, size=num_evals)
-                        for i in range(num_evals):
-                            est = ml(random_state=rints[i])
-                            est.fit(X_train, y_train, weights)
-                            print("Ending the fitting process. ")
-
-                            train_score = score(est, X_train, y_train, sens_features, f_metric)
-                            test_score = score(est, X_test, y_test, sens_features, f_metric)
-
-                            print("Ending the scoring process. ")
-
-                            this_score = {}
-                            train_score = {f"train_{k}": v for k, v in train_score.items()}
-                            this_score.update(train_score)
-                            this_score.update(test_score)
-
-                            this_score["taskid"] = taskid
-                            this_score["exp_name"] = exp
-                            this_score["seed"] = rints[i]
-
-                            scores.loc[len(scores.index)] = this_score  
-
-                        with open(f"{save_folder}/scores.pkl", "wb") as f:
-                            pickle.dump(scores, f)
-                    
-                    else:
-                        scores = pd.DataFrame(columns = ['taskid','exp_name','seed','auroc', 'accuracy', 'balanced_accuracy', 'fairness', 'train_auroc', 'train_accuracy', 
-                                                        'train_balanced_accuracy', 'train_fairness'])
-                        ## Launch 5 independent runs with different seeds
-                        for i in range(num_runs):
-                            ga_func = partial(fitness_func, model = ml(random_state=seed+i), X=X_train, y=y_train, sens_features=sens_features, f_metric=subgroup_FNR_loss, seed=seed)
-                            ga_func.__name__ = 'ga_func'
-                            ga = GA(ind_size = 2**(len(sens_features)+ 1), random_state=seed, **ga_params)
-                            ga.optimize(fn=ga_func)
-
-                            for j in range(ga.evaluated_individuals.shape[0]):
-                                est = ml(random_state=seed+i)
-                                weights = partial_to_full_sample_weight(ga.evaluated_individuals.loc[j,'individual'], X_train, y_train, sens_features)
-                                est.fit(X_train, y_train, weights)
-                                print("Ending the fitting process. ")
-
-                                train_score = score(est, X_train, y_train, sens_features, f_metric)
-                                test_score = score(est, X_test, y_test, sens_features, f_metric)
-
-                                print("Ending the scoring process. ")
-
-                                this_score = {}
-                                train_score = {f"train_{k}": v for k, v in train_score.items()}
-                                this_score.update(train_score)
-                                this_score.update(test_score)
-
-                                this_score["taskid"] = taskid
-                                this_score["exp_name"] = exp
-                                this_score["seed"] = seed+i
-
-                                scores.loc[len(scores.index)] = this_score  
-
-                        with open(f"{save_folder}/scores.pkl", "wb") as f:
-                            pickle.dump(scores, f)
-
-                        return
-                except Exception as e:
-                    trace =  traceback.format_exc()
-                    pipeline_failure_dict = {"taskid": taskid, "exp_name": exp,  "error": str(e), "trace": trace}
-                    print("failed on ")
-                    print(save_folder)
-                    print(e)
-                    print(trace)
-
-                    with open(f"{save_folder}/failed.pkl", "wb") as f:
-                        pickle.dump(pipeline_failure_dict, f)
-
-                    return
-    
-    print("all finished")
-
-
-def loop_with_equal_evals2(ml_models, experiments, task_id_lists, base_save_folder, num_runs, f_metric, ga_params):
-    for m, ml in enumerate(ml_models):
-        for t, taskid in enumerate(task_id_lists):
-            for r in range(num_runs):
-                for e, exp in enumerate(experiments):
-
-                    save_folder = f"{base_save_folder}/{ml}/{taskid}_{r}_{exp}"
-                    time.sleep(random.random()*5)
-                    if not os.path.exists(save_folder):
-                        os.makedirs(save_folder)
-                    else:
-                        continue
-
-                    print("working on ")
-                    print(save_folder)
-
-                    print("loading data")
-                    super_seed = (m+t+r+e)*1000
-                    print("Super Seed : ", super_seed)
-                    
-                    X_train, y_train, X_test, y_test, features, sens_features = load_task(taskid)
-                    X = pd.concat([X_train,X_test], ignore_index=True)
-                    y = pd.concat([y_train,y_test], ignore_index=True)
-
-                    # Split the data into training and testing sets
-                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=r)
-
-                    # Split the training set into training and validation sets
-                    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, stratify=y_train, random_state=r)
-
-                    if taskid.split()[-1]=='rus':
-                        rus = RandomUnderSampler(sampling_strategy = "auto", random_state=r)
-                        X_train, y_train = rus.fit_resample(X_train, y_train)
-                        
-
-                    print("Training data: ", X_train, y_train)
-
-                    print("starting ml")
-                                    
-                    try:  
-                    
-                        start = time.time()
-                                
-                        print("Starting the fitting process. ")
-                        if exp=='No Weights':
-                            num_evals = ga_params['pop_size']*ga_params['max_gens']
-                            scores = pd.DataFrame(columns = ['taskid','exp_name','seed', 'run', 'auroc', 'accuracy', 'balanced_accuracy', 'fairness', 'train_auroc', 'train_accuracy', 
-                                                            'train_balanced_accuracy', 'train_fairness'])
-                            for i in range(num_evals):
-                                this_seed = super_seed + i
-                                est = ml(random_state=this_seed)
-                                est.fit(X_train, y_train)
-                                print("Ending the fitting process. ")
-
-                                train_score = score(est, X_val, y_val, sens_features, f_metric)
-                                test_score = score(est, X_test, y_test, sens_features, f_metric)
-
-                                print("Ending the scoring process. ")
-
-                                this_score = {}
-                                train_score = {f"train_{k}": v for k, v in train_score.items()}
-                                this_score.update(train_score)
-                                this_score.update(test_score)
-
-                                this_score["taskid"] = taskid
-                                this_score["exp_name"] = exp
-                                this_score["seed"] = this_seed
-                                this_score["run"] = r
-
-                                scores.loc[len(scores.index)] = this_score  
-
-                            with open(f"{save_folder}/scores.pkl", "wb") as f:
-                                pickle.dump(scores, f)
-
-                            
-                        elif exp=='Calculated Weights':
-                            num_evals = ga_params['pop_size']*ga_params['max_gens']
-                            weights =  calc_weights(X_train, y_train, sens_features)
-                            scores = pd.DataFrame(columns = ['taskid','exp_name','seed','run','auroc', 'accuracy', 'balanced_accuracy', 'fairness', 'train_auroc', 'train_accuracy', 
-                                                            'train_balanced_accuracy', 'train_fairness'])
-                            for i in range(num_evals):
-                                this_seed = super_seed + i
-                                est = ml(random_state=this_seed)
-                                est.fit(X_train, y_train, weights)
-                                print("Ending the fitting process. ")
-
-                                train_score = score(est, X_val, y_val, sens_features, f_metric)
-                                test_score = score(est, X_test, y_test, sens_features, f_metric)
-
-                                print("Ending the scoring process. ")
-
-                                this_score = {}
-                                train_score = {f"train_{k}": v for k, v in train_score.items()}
-                                this_score.update(train_score)
-                                this_score.update(test_score)
-
-                                this_score["taskid"] = taskid
-                                this_score["exp_name"] = exp
-                                this_score["seed"] = this_seed
-                                this_score["run"] = r
-
-                                scores.loc[len(scores.index)] = this_score  
-
-                            with open(f"{save_folder}/scores.pkl", "wb") as f:
-                                pickle.dump(scores, f)
-                        
-                        else:
-                            scores = pd.DataFrame(columns = ['taskid','exp_name','seed','run','auroc', 'accuracy', 'balanced_accuracy', 'fairness', 'train_auroc', 'train_accuracy', 
-                                                            'train_balanced_accuracy', 'train_fairness'])
-                            ga_func = partial(fitness_func, model = ml(random_state=super_seed), X=X_train, y=y_train, sens_features=sens_features, f_metric=subgroup_FNR_loss, seed=super_seed)
-                            ga_func.__name__ = 'ga_func'
-                            ga = GA(ind_size = 2**(len(sens_features)+ 1), random_state=super_seed, **ga_params)
-                            ga.optimize(fn=ga_func)
-
-                            for j in range(ga.evaluated_individuals.shape[0]):
-                                est = ml(random_state=super_seed)
-                                weights = partial_to_full_sample_weight(ga.evaluated_individuals.loc[j,'individual'], X_train, y_train, sens_features)
-                                est.fit(X_train, y_train, weights)
-                                print("Ending the fitting process. ")
-
-                                train_score = score(est, X_val, y_val, sens_features, f_metric)
-                                test_score = score(est, X_test, y_test, sens_features, f_metric)
-
-                                print("Ending the scoring process. ")
-
-                                this_score = {}
-                                train_score = {f"train_{k}": v for k, v in train_score.items()}
-                                this_score.update(train_score)
-                                this_score.update(test_score)
-
-                                this_score["taskid"] = taskid
-                                this_score["exp_name"] = exp
-                                this_score["seed"] = super_seed
-                                this_score["run"] = r
-
-                                scores.loc[len(scores.index)] = this_score  
-
-                            with open(f"{save_folder}/scores.pkl", "wb") as f:
-                                pickle.dump(scores, f)
-
-                            return
-                    except Exception as e:
-                        trace =  traceback.format_exc()
-                        pipeline_failure_dict = {"taskid": taskid, "exp_name": exp,  "error": str(e), "trace": trace}
-                        print("failed on ")
-                        print(save_folder)
-                        print(e)
-                        print(trace)
-
-                        with open(f"{save_folder}/failed.pkl", "wb") as f:
-                            pickle.dump(pipeline_failure_dict, f)
-
-                        return
+    scores = {}
+    for obj in objective_functions:
+        if obj == 'subgroup_FNR_loss':
+            f_metric = subgroup_FNR_loss
+            y_proba = est.predict_proba(X)[:,1]
+            X_prime = X.loc[:, sens_features] 
+            # Both y_val and y_proba should be 1D arrays
+            y  = y.to_numpy().flatten()
+            y_proba = y_proba.flatten()
+            scores[obj] = f_metric(y, y_proba, X_prime, grouping = 'intersectional', abs_val = True, gamma = True)
         
-    print("all finished")
+        elif obj == 'auroc':
+            try:
+                this_auroc_score = sklearn.metrics.get_scorer("roc_auc")(est, X, y)
+            except:
+                # Sometimes predict_proba can give NaN values
+                y_preds = est.predict(X)
+                this_auroc_score = metrics.roc_auc_score(y, y_preds)
+            scores[obj] = this_auroc_score
+
+        elif obj == 'accuracy':
+            this_accuracy_score = sklearn.metrics.get_scorer("accuracy")(est, X, y)
+            scores[obj] = this_accuracy_score
+
+        else:
+            raise ValueError(f"Objective function {obj} not recognized.")
+
+    return scores

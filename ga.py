@@ -10,10 +10,10 @@ class Individual():
 
 
 class GA():
-    def __init__(self, ind_size, pop_size, max_gens, random_state, mut_rate, cross_rate):
+    def __init__(self, ind_size, pop_size, max_gens, random_state, mut_rate, cross_rate, fitness_func):
 
         """
-        Initializer for the GA class.
+        Initializer for the GA class. Assume that the fitness function is a maximizing problem.
 
         Parameters
         ----------
@@ -33,6 +33,7 @@ class GA():
         self.ind_size = ind_size
         self.mut_rate = mut_rate
         self.cross_rate = cross_rate
+        self.fitness_func = fitness_func
         self.rng = np.random.default_rng(random_state)
         self.population = []
         self.best_individual = None
@@ -46,14 +47,15 @@ class GA():
             self.population.append(Individual(2*self.rng.random(size=self.ind_size), None))
 
     def mutation(self, ind):
+        ''' With a probability of mut_rate, mutate the individual. '''
         _program = copy.deepcopy(ind.program)
-        for i in range(len(_program)):
-                if self.rng.random()<self.mut_rate:
-                    if self.rng.random()<0.5:
-                        new_val = _program[i] + self.rng.random()
-                    else:
-                        new_val = _program[i] - self.rng.random()
-                    _program[i] = min(max(new_val,0),2)
+        if self.rng.random()<self.mut_rate:
+            for i in range(len(_program)):
+                if self.rng.random()<0.5:
+                    new_val = _program[i] + self.rng.random()
+                else:
+                    new_val = _program[i] - self.rng.random()
+                _program[i] = min(max(new_val,0),2)
                     
         return Individual(_program, None)
 
@@ -74,7 +76,8 @@ class GA():
                     
         return Individual(child, None)
     
-    def selection(self):  
+    def selection(self):
+        # Assume all objectives are to be maximized  
         candidates = self.population
         cases = list(range(len(self.population[0].fitness)))
         self.rng.shuffle(cases)
@@ -90,7 +93,7 @@ class GA():
         
         return self.rng.choice(candidates)
 
-    def evaluate_population(self, fn):
+    def evaluate_population(self):
 
         """
         Sets the fitness of the individual passed in. Make sure higher fitness values are better.
@@ -103,9 +106,8 @@ class GA():
             Fitness function used to evaluate the fitness.
         """
 
-        
         for individual in self.population:
-            individual.fitness = fn(individual.program)
+            individual.fitness = self.fitness_func(individual.program)
             # Update self.evaluated_individuals
             self.evaluated_individuals.loc[len(self.evaluated_individuals.index)] = {'individual':individual.program,'perf_fitness':individual.fitness[0],'fair_fitness':individual.fitness[1]}
 
@@ -120,7 +122,7 @@ class GA():
         self.best_individual = self.rng.choice(candidates)
 
 
-    def step_optimize(self, fn):
+    def step_optimize(self):
 
         """
         Progresses the optimization prcedure by a single iteration.
@@ -144,11 +146,11 @@ class GA():
 
         self.population = _population
 
-        self.evaluate_population(fn)
+        self.evaluate_population()
 
         
 
-    def optimize(self, fn):
+    def optimize(self):
 
         """
         Responsible for managing the optimisation process.
@@ -159,10 +161,12 @@ class GA():
             Fitness function used to evaluate the fitness.
         """
 
+        print("Generation 1 started:")
         self.initialize_population()
-        self.evaluate_population(fn)
-        for gen in range(self.max_gens):
-            print("Generation ", gen+1, " started:")
-            self.step_optimize(fn)
+        self.evaluate_population()
+        print("Generation 1 ended.")
+        for gen in range(self.max_gens-1):
+            print("Generation ", gen+2, " started:")
+            self.step_optimize()
             print("Generation ", gen+1, " ended.")
             print("Best Individual from so far: ", self.best_individual.fitness)
