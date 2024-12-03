@@ -8,8 +8,10 @@ import traceback
 from sklearn.model_selection import train_test_split
 
 import utils
-import ga_nsga2
-import ga
+# use merged version instead
+# import ga_nsga2
+# import ga
+from ga_and_nsga2 import GA
 
 def loop_with_equal_evals2(ml_models, experiments, task_id_lists, base_save_folder, data_dir, num_runs, objective_functions, objective_functions_weights , ga_params):
     for m, ml in enumerate(ml_models):

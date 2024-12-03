@@ -8,7 +8,11 @@ import time
 import os
 import random
 import numpy as np
-from ga import GA
+
+# commenting out below to use merged
+# from ga import GA
+from ga_and_nsga2 import GA
+
 from functools import partial
 from fomo.metrics import subgroup_FPR_loss, subgroup_FNR_loss
 import pandas as pd
