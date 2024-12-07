@@ -9,8 +9,7 @@ import os
 import random
 import numpy as np
 
-# commenting out, using merged version
-# from ga import GA
+# using merged version
 from ga_and_nsga2 import GA
 
 from functools import partial
@@ -31,7 +30,7 @@ def main():
     gp_params_local = {'pop_size': 5, 'max_gens':10,  'mut_rate':0.1, 'cross_rate':0.8}
     gp_params_remote = {'pop_size': 20, 'max_gens':50,  'mut_rate':0.1, 'cross_rate':0.8}
 
-    # debanshi: changed this path to make it work for my system
+    # changed this path to make it work for my Windows system
     data_dir = './Datasets'
      
     #local
