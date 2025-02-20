@@ -8,16 +8,18 @@ import traceback
 from sklearn.model_selection import train_test_split
 
 import utils
-# use merged version instead
-from ga_and_nsga2 import GA
+# modify for merged ga/nsga
+from ga import GA
 
 def loop_with_equal_evals2(ml_models, experiments, task_id_lists, base_save_folder, data_dir, num_runs, objective_functions, objective_functions_weights , ga_params):
     for m, ml in enumerate(ml_models):
         for t, taskid in enumerate(task_id_lists):
             for r in range(num_runs):
                 for e, exp in enumerate(experiments):
+                    # modifying to get windows trouble to stop (labeling issue)
+                    model_name = ml.__name__  # Extract the class name as a string
+                    save_folder = f"{base_save_folder}/{model_name}/{taskid}_{r}_{exp}"
 
-                    save_folder = f"{base_save_folder}/{ml}/{taskid}_{r}_{exp}"
                     time.sleep(random.random()*5)
                     if not os.path.exists(save_folder):
                         os.makedirs(save_folder)
@@ -41,7 +43,8 @@ def loop_with_equal_evals2(ml_models, experiments, task_id_lists, base_save_fold
                                     
                     try:  
                         print("Starting the fitting process. ")
-                        # condense repeating code
+                        
+                        # condense repeating parts
                         if exp in ['Equal Weights', 'Deterministic Weights']:
                             num_evals = ga_params['pop_size'] * ga_params['max_gens']
                             scores = pd.DataFrame(columns=['taskid', 'exp_name', 'seed', 'run', *objective_functions, *['train_' + k for k in objective_functions]])
@@ -75,10 +78,8 @@ def loop_with_equal_evals2(ml_models, experiments, task_id_lists, base_save_fold
                                 this_score.update(train_score)
                                 this_score.update(test_score)
 
-                                this_score["taskid"] = taskid
-                                this_score["exp_name"] = exp
-                                this_score["seed"] = this_seed
-                                this_score["run"] = r
+                                this_score["exp_conditions"] = {"this_task": taskid, "this_exp": exp, "this_seed": this_seed, "this_run":r, "total_runs": num_runs, "objective_functions": objective_functions, 
+                                                                "objective_functions_weights": objective_functions_weights, "ga_params": ga_params}
 
                                 scores.loc[len(scores.index)] = this_score
 
@@ -93,6 +94,9 @@ def loop_with_equal_evals2(ml_models, experiments, task_id_lists, base_save_fold
                             ga_func = partial(utils.fitness_func_holdout, model = ml(random_state=super_seed), X_train=X_train, y_train=y_train, X_val =X_val, y_val=y_val, 
                                               sens_features=sens_features, objective_fuctions=objective_functions, objective_functions_weights=objective_functions_weights)
                             ga_func.__name__ = 'ga_func'
+                            
+                            # changing to merged
+                            # ga = ga_nsga2.GA(ind_size = 2**(len(sens_features)+ 1), random_state=super_seed, fitness_func= ga_func,**ga_params)
                             
                             ga = GA(
                                 ind_size=2**(len(sens_features) + 1),
@@ -120,10 +124,9 @@ def loop_with_equal_evals2(ml_models, experiments, task_id_lists, base_save_fold
                                 this_score.update(train_score)
                                 this_score.update(test_score)
 
-                                this_score["taskid"] = taskid
-                                this_score["exp_name"] = exp
-                                this_score["seed"] = super_seed
-                                this_score["run"] = r
+                                this_score["exp_conditions"] = {"this_task": taskid, "this_exp": exp, "this_seed": super_seed, "this_run":r, "total_runs": num_runs, "objective_functions": objective_functions, 
+                                                                "objective_functions_weights": objective_functions_weights, "ga_params": ga_params}
+
 
                                 scores.loc[len(scores.index)] = this_score  
 
@@ -131,7 +134,6 @@ def loop_with_equal_evals2(ml_models, experiments, task_id_lists, base_save_fold
                                 pickle.dump(scores, f)
 
                             return
-                        
                     except Exception as e:
                         trace =  traceback.format_exc()
                         pipeline_failure_dict = {"taskid": taskid, "exp_name": exp,  "error": str(e), "trace": trace}
@@ -164,7 +166,7 @@ def loop_with_equal_evals3(ml_models, experiments, task_id_lists, base_save_fold
                     print(save_folder)
 
                     print("loading data")
-                    super_seed = (m+t+r+e)*1000
+                    super_seed = (m+t+r+e) * 1000
                     print("Super Seed : ", super_seed)
                     
                     # Split the data into training_validation and testing sets
@@ -172,6 +174,7 @@ def loop_with_equal_evals3(ml_models, experiments, task_id_lists, base_save_fold
                  
                     try:  
                         print("Starting the fitting process. ")
+                        
                         # Condensing repetition in code
 
                         # Common initialization
@@ -274,3 +277,190 @@ def loop_with_equal_evals3(ml_models, experiments, task_id_lists, base_save_fold
                         return
         
     print("all finished")
+
+def loop_with_equal_evals4(ml_models, experiments, task_id_lists, base_save_folder, data_dir, num_runs, objective_functions, objective_functions_weights, ga_params):
+    for m, ml in enumerate(ml_models):
+        for t, taskid in enumerate(task_id_lists):
+            for r in range(num_runs):
+                for e, exp in enumerate(experiments):
+                    # Create a save folder
+                    model_name = ml.__name__
+                    save_folder = f"{base_save_folder}/{model_name}/{taskid}_{r}_{exp}"
+                        
+                    time.sleep(random.random() * 5)
+                    if not os.path.exists(save_folder):
+                        os.makedirs(save_folder)
+                    else:
+                        continue
+
+                    print("Working on:")
+                    print(save_folder)
+
+                    print("Loading data...")
+                    super_seed = (m + t + r + e) * 1000
+                    print("Super Seed:", super_seed)
+
+                    # Split the data into training, validation, and testing sets
+                    X_train_val, y_train_val, X_test, y_test, features, sens_features = utils.load_task(
+                        data_dir, taskid, test_size=0.15, seed=r
+                    )
+
+                    # Further split training data into training and validation sets
+                    X_train, X_val, y_train, y_val = train_test_split(
+                        X_train_val, y_train_val, test_size=0.2, stratify=y_train_val, random_state=r
+                    )
+
+                    try:
+                        
+                        # Initialize scores DataFrame
+                        scores = pd.DataFrame(
+                            columns=[
+                                'taskid', 'exp_name', 'seed', 'run', *objective_functions,
+                                *['train_' + k for k in objective_functions]
+                            ]
+                        )
+                        # Logic for Transfer_Weights_Holdout
+                        if exp == "Transfer_Weights_Holdout":
+                            print("Applying Transfer Weights Method...")
+                            # Sample a% of training data for weight evolution. Currently, 10%
+                            a = 0.1
+                            X_sample, _, y_sample, _ = train_test_split(
+                                X_train, y_train, test_size=(1 - a), stratify=y_train, random_state=r
+                            )
+
+                            # Define GA fitness function
+                            ga_func = partial(
+                                utils.fitness_func_holdout,
+                                model=ml(random_state=super_seed),
+                                X_train=X_sample,
+                                y_train=y_sample,
+                                X_val=X_val,
+                                y_val=y_val,
+                                sens_features=sens_features,
+                                objective_fuctions=objective_functions,
+                                objective_functions_weights=objective_functions_weights
+                            )
+                            ga_func.__name__ = 'ga_func'
+
+                            # Run GA
+                            ga = GA(
+                                ind_size=2**(len(sens_features) + 1),
+                                random_state=super_seed,
+                                fitness_func=ga_func,
+                                use_nsga=True,
+                                **ga_params
+                            )
+                            ga.optimize()
+
+                            # Apply evolved weights to the full dataset
+                            for j in range(ga.evaluated_individuals.shape[0]):
+                                est = ml(random_state=super_seed)
+                                weights = utils.partial_to_full_sample_weight(
+                                    ga.evaluated_individuals.loc[j, 'individual'],
+                                    X_train_val,
+                                    y_train_val,
+                                    sens_features
+                                )
+                                est.fit(X_train_val, y_train_val, weights)
+                                print("Ending the fitting process.")
+
+                                # Evaluate scores
+                                train_score = utils.evaluate_objective_functions(
+                                    est, X_train_val, y_train_val, objective_functions, sens_features
+                                )
+                                test_score = utils.evaluate_objective_functions(
+                                    est, X_test, y_test, objective_functions, sens_features
+                                )
+                                print("Ending the scoring process.")
+
+                                # Record scores
+                                this_score = {}
+                                train_score = {f"train_{k}": v for k, v in train_score.items()}
+                                this_score.update(train_score)
+                                this_score.update(test_score)
+
+                                this_score["taskid"] = taskid
+                                this_score["exp_name"] = exp
+                                this_score["seed"] = super_seed
+                                this_score["run"] = r
+
+                                scores.loc[len(scores.index)] = this_score
+
+                         # Logic for Evolved_Weights_Holdout
+                        elif exp == "Evolved_Weights_Holdout":
+                            print("Applying Evolved Weights Method...")
+                            ga_func = partial(
+                                utils.fitness_func_holdout,
+                                model=ml(random_state=super_seed),
+                                X_train=X_train,
+                                y_train=y_train,
+                                X_val=X_val,
+                                y_val=y_val,
+                                sens_features=sens_features,
+                                objective_fuctions=objective_functions,
+                                objective_functions_weights=objective_functions_weights
+                            )
+                            ga_func.__name__ = 'ga_func'
+
+                            # Run GA
+                            ga = GA(
+                                ind_size=2**(len(sens_features) + 1),
+                                random_state=super_seed,
+                                fitness_func=ga_func,
+                                use_nsga=True,
+                                **ga_params
+                            )
+                            ga.optimize()
+
+                            # Apply evolved weights
+                            for j in range(ga.evaluated_individuals.shape[0]):
+                                est = ml(random_state=super_seed)
+                                weights = utils.partial_to_full_sample_weight(
+                                    ga.evaluated_individuals.loc[j, 'individual'],
+                                    X_train,
+                                    y_train,
+                                    sens_features
+                                )
+                                est.fit(X_train, y_train, weights)
+
+                                # Evaluate scores
+                                train_score = utils.evaluate_objective_functions(
+                                    est, X_train, y_train, objective_functions, sens_features
+                                )
+                                test_score = utils.evaluate_objective_functions(
+                                    est, X_test, y_test, objective_functions, sens_features
+                                )
+
+                                # Record scores
+                                this_score = {f"train_{k}": v for k, v in train_score.items()}
+                                this_score.update(test_score)
+                                this_score["taskid"] = taskid
+                                this_score["exp_name"] = exp
+                                this_score["seed"] = super_seed
+                                this_score["run"] = r
+
+                                scores.loc[len(scores.index)] = this_score
+
+                        # Save scores
+                        with open(f"{save_folder}/scores.pkl", "wb") as f:
+                            pickle.dump(scores, f)
+
+                    except Exception as e:
+                        # Handle exceptions and log failures
+                        trace = traceback.format_exc()
+                        pipeline_failure_dict = {
+                            "taskid": taskid,
+                            "exp_name": exp,
+                            "error": str(e),
+                            "trace": trace,
+                            "seed": super_seed
+                        }
+                        print(f"Failed on: {save_folder}")
+                        print(e)
+                        print(trace)
+
+                        with open(f"{save_folder}/failed.pkl", "wb") as f:
+                            pickle.dump(pipeline_failure_dict, f)
+
+    print("all finished")
+

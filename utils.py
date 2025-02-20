@@ -10,12 +10,10 @@ import pandas as pd
 import os
 import pickle
 import time
-from fomo.metrics import subgroup_FPR_loss, subgroup_FNR_loss
 from functools import partial
 from deap.tools._hypervolume import pyhv
 import random
 import traceback
-from pymoo.config import Config
 import collections
 from ga import GA
 from xgboost import XGBClassifier
@@ -23,11 +21,120 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold
 def makehash():
     return collections.defaultdict(makehash)
-Config.warnings['not_compiled'] = False
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
 
 from fairlearn.metrics import demographic_parity_difference
+
+
+def FPR(y_true, y_pred):
+    """Returns False Positive Rate.
+
+    Parameters
+    ----------
+    y_true: array-like, bool 
+        True labels. 
+    y_pred: array-like, float or bool
+        Predicted labels. 
+
+    If y_pred is floats, this is the "soft" false positive rate 
+    (i.e. the average probability estimate for the negative class)
+    """
+    # if there are no negative labels, return zero
+    if np.sum(y_true) == len(y_true):
+        return 0
+    yt = y_true.astype(bool)
+    return np.sum(y_pred[~yt])/np.sum(~yt)
+
+def FNR(y_true, y_pred):
+    """Returns False Negative Rate.
+
+    Parameters
+    ----------
+    y_true: array-like, bool 
+        True labels. 
+    y_pred: array-like, float or bool
+        Predicted labels. 
+
+    If y_pred is floats, this is the "soft" false negative rate 
+    (i.e. the average probability estimate for the negative class)
+    """
+    # if there are no postive labels, return zero
+    if np.sum(y_true) == 0:
+        return 0
+    yt = y_true.astype(bool)
+    return np.sum(1-y_pred[yt])/np.sum(yt)
+
+def subgroup_loss(y_true, y_pred, X_protected, metric, grouping = 'intersectional', abs_val = False, gamma = True):
+    assert isinstance(X_protected, pd.DataFrame), "X should be a dataframe"
+    if not isinstance(y_true, pd.Series):
+        y_true = pd.Series(y_true, index=X_protected.index)
+    else:
+        y_true.index = X_protected.index
+
+    y_pred = pd.Series(y_pred, index=X_protected.index)
+
+    if (grouping == 'intersectional'):
+        groups = list(X_protected.columns)
+        categories = X_protected.groupby(groups).groups  
+        #print("Categories: ", categories)
+    else:
+        categories = {}
+        for col in X_protected.columns:
+            unique_values = X_protected[col].unique()
+            for val in unique_values:
+                category_key = f'{col}_{val}'
+                mask = X_protected[col] == val
+                indices = X_protected[mask].index
+                categories[category_key] = indices
+
+    if isinstance(metric,str):
+        loss_fn = FPR if metric=='FPR' else FNR
+    elif callable(metric):
+        loss_fn = metric
+    else:
+        raise ValueError(f'metric={metric} must be "FPR", "FNR", or a callable')
+
+    base_loss = loss_fn(y_true, y_pred)
+    max_loss = 0.0
+    for c, idx in categories.items():
+        # for FPR and FNR, gamma is also conditioned on the outcome probability
+        if metric=='FPR' or loss_fn == FPR: 
+            g = 1 - np.sum(y_true.loc[idx])/len(X_protected)
+        elif metric=='FNR' or loss_fn == FNR: 
+            g = np.sum(y_true.loc[idx])/len(X_protected)
+        else:
+            g = len(idx) / len(X_protected)
+
+        category_loss = loss_fn(
+            y_true.loc[idx].values, 
+            y_pred.loc[idx].values
+        )
+        
+        deviation = category_loss - base_loss
+
+        if abs_val:
+            deviation = np.abs(deviation)
+        
+        if gamma:
+            deviation *= g
+
+        if deviation > max_loss:
+            max_loss = deviation
+
+    return max_loss
+
+def subgroup_FNR_loss(X, y, y_pred, sens_features):
+    # Since it would be used as a scorer, we will assume est if already fitted
+    X_prime = X.loc[:, sens_features] 
+    
+    # Both y_val and y_proba should be pd.Series; Also checks whether they are 1D and have the same length as X_prime
+    if not isinstance(y, pd.Series):
+        y = pd.Series(y, index=X_prime.index)
+    if not isinstance(y_pred, pd.Series):
+        y_pred = pd.Series(y_pred, index=X_prime.index)
+    return subgroup_loss(y, y_pred, X_prime, 'FNR', grouping = 'intersectional', abs_val = True, gamma = True)
+
 
 def demographic_parity_difference(y, y_pred, X, sens_features):
     y_true = [0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1]
@@ -44,10 +151,7 @@ def binary_to_decimal(list_of_nums):
 def partial_to_full_sample_weight(partial_weights, X, y, sens_features):
     assert y.index.equals(X.index), "Indices of y and sensitive_columns do not match."
     sensitive_columns = X.loc[:, sens_features]
-    print("Sensitive Columns", sensitive_columns)
-    print("y_train", y)
     sensitive_columns['target'] = y
-    print("Sensitive Columns", sensitive_columns)
     all_indices= sensitive_columns[sens_features+['target']].apply(binary_to_decimal, axis=1)
     all_indices = all_indices.to_numpy()
     return np.array(partial_weights[all_indices])
@@ -275,13 +379,7 @@ def evaluate_objective_functions(est, X, y,  objective_functions=None, sens_feat
     scores = {}
     for obj in objective_functions:
         if obj == 'subgroup_FNR_loss':
-            f_metric = subgroup_FNR_loss
-            y_proba = est.predict_proba(X)[:,1]
-            X_prime = X.loc[:, sens_features] 
-            # Both y_val and y_proba should be 1D arrays
-            y  = y.to_numpy().flatten()
-            y_proba = y_proba.flatten()
-            scores[obj] = f_metric(y, y_proba, X_prime, grouping = 'intersectional', abs_val = True, gamma = True)
+            scores[obj] = subgroup_FNR_loss(X, y, est.predict(X), sens_features)
         
         elif obj == 'auroc':
             try:
