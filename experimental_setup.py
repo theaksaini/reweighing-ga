@@ -444,6 +444,8 @@ def loop_with_equal_evals4(ml_models, experiments, task_id_lists, base_save_fold
                         # Save scores
                         with open(f"{save_folder}/scores.pkl", "wb") as f:
                             pickle.dump(scores, f)
+                        
+                        return
 
                     except Exception as e:
                         # Handle exceptions and log failures
@@ -461,6 +463,8 @@ def loop_with_equal_evals4(ml_models, experiments, task_id_lists, base_save_fold
 
                         with open(f"{save_folder}/failed.pkl", "wb") as f:
                             pickle.dump(pipeline_failure_dict, f)
+                        
+                        return
 
     print("all finished")
 

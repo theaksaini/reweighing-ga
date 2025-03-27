@@ -24,7 +24,7 @@ def makehash():
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
 
-from fairlearn.metrics import demographic_parity_difference
+from fairlearn.metrics import demographic_parity_difference as dpd
 
 
 def FPR(y_true, y_pred):
@@ -136,12 +136,15 @@ def subgroup_FNR_loss(X, y, y_pred, sens_features):
     return subgroup_loss(y, y_pred, X_prime, 'FNR', grouping = 'intersectional', abs_val = True, gamma = True)
 
 
-def demographic_parity_difference(y, y_pred, X, sens_features):
-    y_true = [0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1]
-    y_pred = [0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 0]
-    sf_data = ['b', 'b', 'a', 'b', 'b', 'c', 'c', 'c', 'a', 'a', 'c', 'a', 'b', 'c', 'c', 'b', 'c', 'c']
-    
-    return demographic_parity_difference(y_true, y_pred, sensitive_features=sf_data)
+def demographic_parity_difference(y_true, y_pred, X, sens_features):
+    """Returns the demographic parity difference."""
+    # Concatenate the values in sensitive features into a single list of strings
+    if not all(col in X.columns for col in sens_features):
+        raise ValueError("All elements in sens_features must be column names in X.")
+    X_sensitive = X[sens_features]
+    sf_data = X_sensitive.apply(lambda row: ''.join(row.astype(str)), axis=1).tolist()
+
+    return dpd(y_true, y_pred, sensitive_features=sf_data)
 
 def binary_to_decimal(list_of_nums):
     list_of_nums = [str(int(x)) for x in list_of_nums]
@@ -393,6 +396,10 @@ def evaluate_objective_functions(est, X, y,  objective_functions=None, sens_feat
         elif obj == 'accuracy':
             this_accuracy_score = sklearn.metrics.get_scorer("accuracy")(est, X, y)
             scores[obj] = this_accuracy_score
+
+        elif obj == 'demographic_parity_difference':
+            y_pred = est.predict(X)
+            scores[obj] = demographic_parity_difference(y, y_pred, X, sens_features)
 
         else:
             raise ValueError(f"Objective function {obj} not recognized.")
