@@ -184,11 +184,11 @@ def fitness_func_kfold(sample_weight, model, X, y, sens_features, f_metric, seed
 
     return np.mean(auroc), np.mean(f_val)
 
-def fitness_func_holdout(sample_weight, model, X_train, y_train, X_val, y_val, sens_features, objective_fuctions, objective_functions_weights):
+def fitness_func_holdout(sample_weight, model, X_train, y_train, X_val, y_val, sens_features, objective_functions, objective_functions_weights):
     '''
     model: fittend model or pipeline
     sen_features: list of senstive features
-    objective_fuctions: list of objective functions
+    objective_functions: list of objective functions
     objective_functions_weights: list of weights for each objective function
     '''
     
@@ -196,9 +196,9 @@ def fitness_func_holdout(sample_weight, model, X_train, y_train, X_val, y_val, s
 
     model.fit(sample_weight=sample_weights_full, X=X_train, y=y_train)
 
-    scores = evaluate_objective_functions(model, X_val, y_val, objective_fuctions, sens_features)
+    scores = evaluate_objective_functions(model, X_val, y_val, objective_functions, sens_features)
 
-    return [scores[objective_fuctions[i]]*objective_functions_weights[i] for i in range(len(objective_fuctions))]
+    return [scores[objective_functions[i]]*objective_functions_weights[i] for i in range(len(objective_functions))]
 
 def learn_sel_fair_split(X, y, sens_features, seed, split_frac):
     # Get unique combinations of Sensitive Features

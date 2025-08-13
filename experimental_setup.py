@@ -92,7 +92,7 @@ def loop_with_equal_evals2(ml_models, experiments, task_id_lists, base_save_fold
                         else:
                             scores = pd.DataFrame(columns = ['taskid','exp_name','seed', 'run', *objective_functions, *['train_'+k for k in objective_functions]])
                             ga_func = partial(utils.fitness_func_holdout, model = ml(random_state=super_seed), X_train=X_train, y_train=y_train, X_val =X_val, y_val=y_val, 
-                                              sens_features=sens_features, objective_fuctions=objective_functions, objective_functions_weights=objective_functions_weights)
+                                              sens_features=sens_features, objective_functions=objective_functions, objective_functions_weights=objective_functions_weights)
                             ga_func.__name__ = 'ga_func'
                             
                             # changing to merged
@@ -195,7 +195,7 @@ def loop_with_equal_evals3(ml_models, experiments, task_id_lists, base_save_fold
                                 X_train=X_train, y_train=y_train, 
                                 X_val=X_val, y_val=y_val, 
                                 sens_features=sens_features, 
-                                objective_fuctions=['accuracy', 'subgroup_fnr'], 
+                                objective_functions=['accuracy', 'subgroup_fnr'], 
                                 objective_functions_weights=[1, -1]
                             )
                             use_nsga = False
@@ -337,7 +337,7 @@ def loop_with_equal_evals4(ml_models, experiments, task_id_lists, base_save_fold
                                 X_val=X_val,
                                 y_val=y_val,
                                 sens_features=sens_features,
-                                objective_fuctions=objective_functions,
+                                objective_functions=objective_functions,
                                 objective_functions_weights=objective_functions_weights
                             )
                             ga_func.__name__ = 'ga_func'
@@ -397,7 +397,7 @@ def loop_with_equal_evals4(ml_models, experiments, task_id_lists, base_save_fold
                                 X_val=X_val,
                                 y_val=y_val,
                                 sens_features=sens_features,
-                                objective_fuctions=objective_functions,
+                                objective_functions=objective_functions,
                                 objective_functions_weights=objective_functions_weights
                             )
                             ga_func.__name__ = 'ga_func'
@@ -417,15 +417,15 @@ def loop_with_equal_evals4(ml_models, experiments, task_id_lists, base_save_fold
                                 est = ml(random_state=super_seed)
                                 weights = utils.partial_to_full_sample_weight(
                                     ga.evaluated_individuals.loc[j, 'individual'],
-                                    X_train,
-                                    y_train,
+                                    X_train_val,
+                                    y_train_val,
                                     sens_features
                                 )
-                                est.fit(X_train, y_train, weights)
+                                est.fit(X_train_val, y_train_val, weights)
 
                                 # Evaluate scores
                                 train_score = utils.evaluate_objective_functions(
-                                    est, X_train, y_train, objective_functions, sens_features
+                                    est, X_train_val, y_train_val, objective_functions, sens_features
                                 )
                                 test_score = utils.evaluate_objective_functions(
                                     est, X_test, y_test, objective_functions, sens_features
