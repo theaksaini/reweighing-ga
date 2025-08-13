@@ -432,6 +432,7 @@ def loop_with_equal_evals4(ml_models, experiments, task_id_lists, base_save_fold
                                 )
 
                                 # Record scores
+                                this_score = {}
                                 this_score = {f"train_{k}": v for k, v in train_score.items()}
                                 this_score.update(test_score)
                                 this_score["taskid"] = taskid
