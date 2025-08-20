@@ -65,7 +65,7 @@ def FNR(y_true, y_pred):
     yt = y_true.astype(bool)
     return np.sum(1-y_pred[yt])/np.sum(yt)
 
-def subgroup_loss(y_true, y_pred, X_protected, metric, grouping = 'intersectional', abs_val = False, gamma = True):
+def subgroup_loss(y_true, y_pred, X_protected, metric):
     assert isinstance(X_protected, pd.DataFrame), "X should be a dataframe"
     if not isinstance(y_true, pd.Series):
         y_true = pd.Series(y_true, index=X_protected.index)
@@ -74,50 +74,30 @@ def subgroup_loss(y_true, y_pred, X_protected, metric, grouping = 'intersectiona
 
     y_pred = pd.Series(y_pred, index=X_protected.index)
 
-    if (grouping == 'intersectional'):
-        groups = list(X_protected.columns)
-        categories = X_protected.groupby(groups).groups  
-        #print("Categories: ", categories)
-    else:
-        categories = {}
-        for col in X_protected.columns:
-            unique_values = X_protected[col].unique()
-            for val in unique_values:
-                category_key = f'{col}_{val}'
-                mask = X_protected[col] == val
-                indices = X_protected[mask].index
-                categories[category_key] = indices
+    groups = list(X_protected.columns)
+    categories = X_protected.groupby(groups).groups  
 
     if isinstance(metric,str):
         loss_fn = FPR if metric=='FPR' else FNR
     elif callable(metric):
         loss_fn = metric
     else:
-        raise ValueError(f'metric={metric} must be "FPR", "FNR", or a callable')
+        raise ValueError(f"metric={metric} must be 'FPR', 'FNR', or a callable")
 
     base_loss = loss_fn(y_true, y_pred)
     max_loss = 0.0
     for c, idx in categories.items():
+        pos_rate_grp = y_true.loc[idx].mean() 
         # for FPR and FNR, gamma is also conditioned on the outcome probability
         if metric=='FPR' or loss_fn == FPR: 
-            g = 1 - np.sum(y_true.loc[idx])/len(X_protected)
+            g = 1 - pos_rate_grp
         elif metric=='FNR' or loss_fn == FNR: 
-            g = np.sum(y_true.loc[idx])/len(X_protected)
+            g = pos_rate_grp
         else:
             g = len(idx) / len(X_protected)
 
-        category_loss = loss_fn(
-            y_true.loc[idx].values, 
-            y_pred.loc[idx].values
-        )
-        
-        deviation = category_loss - base_loss
-
-        if abs_val:
-            deviation = np.abs(deviation)
-        
-        if gamma:
-            deviation *= g
+        category_loss = loss_fn(y_true.loc[idx].values, y_pred.loc[idx].values)
+        deviation = g * np.abs(category_loss - base_loss)
 
         if deviation > max_loss:
             max_loss = deviation
@@ -125,7 +105,7 @@ def subgroup_loss(y_true, y_pred, X_protected, metric, grouping = 'intersectiona
     return max_loss
 
 def subgroup_FNR_loss(X, y, y_pred, sens_features):
-    # Since it would be used as a scorer, we will assume est if already fitted
+    # Since it would be used as a scorer, we will assume est is already fitted
     X_prime = X.loc[:, sens_features] 
     
     # Both y_val and y_proba should be pd.Series; Also checks whether they are 1D and have the same length as X_prime
@@ -133,7 +113,7 @@ def subgroup_FNR_loss(X, y, y_pred, sens_features):
         y = pd.Series(y, index=X_prime.index)
     if not isinstance(y_pred, pd.Series):
         y_pred = pd.Series(y_pred, index=X_prime.index)
-    return subgroup_loss(y, y_pred, X_prime, 'FNR', grouping = 'intersectional', abs_val = True, gamma = True)
+    return subgroup_loss(y, y_pred, X_prime, 'FNR')
 
 
 def demographic_parity_difference(y_true, y_pred, X, sens_features):
