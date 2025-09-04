@@ -74,6 +74,7 @@ def download_pmad_task(dataset_name, outcome_name, preprocess=True):
     cached_data_path = f"data/{dataset_name}_{preprocess}.pkl"
     print(cached_data_path)
     if not os.path.exists(cached_data_path):
+        # Publicly available; See https://github.com/emilyfranceswong/Evaluating-Bias-Mitigated-Predictive-Models-of-Perinatal-Mood-and-Anxiety-Disorders/tree/main
         all_data = pd.read_excel("De-identified PMAD data.xlsx")
 
         # Extract relevant variables for model fitting
