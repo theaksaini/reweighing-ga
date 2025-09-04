@@ -97,7 +97,7 @@ def compare_reweighting_methods(ml_models, experiments, task_id_lists, base_save
                         elif exp == 'Evolved Weights':
                             scores = pd.DataFrame(columns = ['taskid','exp_name','seed', 'run', *objective_functions, *['train_'+k for k in objective_functions]])
                             ga_func = partial(utils.fitness_func_holdout, model = ml(random_state=super_seed), X_train=X_train, y_train=y_train, X_val =X_val, y_val=y_val, 
-                                              sens_features=sens_features, objective_fuctions=objective_functions, objective_functions_weights=objective_functions_weights)
+                                              sens_features=sens_features, objective_functions=objective_functions, objective_functions_weights=objective_functions_weights)
                             ga_func.__name__ = 'ga_func'
                             
                             # changing to merged
@@ -207,7 +207,7 @@ def loop_with_equal_evals3(ml_models, experiments, task_id_lists, base_save_fold
                                 X_train=X_train, y_train=y_train,
                                 X_val=X_val, y_val=y_val,
                                 sens_features=sens_features,
-                                objective_fuctions=['accuracy','subgroup_FNR_loss'],
+                                objective_functions=['accuracy','subgroup_FNR_loss'],
                                 objective_functions_weights=[1,-1]
                             )
                             use_nsga = False
@@ -358,7 +358,7 @@ def compare_partial_and_full_dataset_evolved_weights(ml_models, experiments, tas
                                 X_val=X_val,
                                 y_val=y_val,
                                 sens_features=sens_features,
-                                objective_fuctions=objective_functions,
+                                objective_functions=objective_functions,
                                 objective_functions_weights=objective_functions_weights
                             )
                             ga_func.__name__ = 'ga_func'
@@ -418,7 +418,7 @@ def compare_partial_and_full_dataset_evolved_weights(ml_models, experiments, tas
                                 X_val=X_val,
                                 y_val=y_val,
                                 sens_features=sens_features,
-                                objective_fuctions=objective_functions,
+                                objective_functions=objective_functions,
                                 objective_functions_weights=objective_functions_weights
                             )
                             ga_func.__name__ = 'ga_func'
