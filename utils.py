@@ -2,20 +2,14 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 import networkx as nx
-import tpot2
+import tpot
 import sklearn
 from sklearn import metrics
 import numpy as np
 import pandas as pd
-import os
-import pickle
-import time
 from functools import partial
 from deap.tools._hypervolume import pyhv
-import random
-import traceback
 import collections
-from ga import GA
 from xgboost import XGBClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold
@@ -286,7 +280,7 @@ def load_task(data_dir, dataset_name, test_size, seed, preprocess=True):
     X_train_pre, y_train_pre = X_train_pre.sort_index(), y_train_pre.sort_index()
     X_test_pre, y_test_pre = X_test_pre.sort_index(), y_test_pre.sort_index()
 
-    preprocessing_pipeline = sklearn.pipeline.make_pipeline(tpot2.builtin_modules.ColumnSimpleImputer("categorical", strategy='most_frequent'), tpot2.builtin_modules.ColumnSimpleImputer("numeric", strategy='mean'), tpot2.builtin_modules.ColumnOneHotEncoder("categorical", min_frequency=0.001, handle_unknown="ignore"))
+    preprocessing_pipeline = sklearn.pipeline.make_pipeline(tpot.builtin_modules.ColumnSimpleImputer("categorical", strategy='most_frequent'), tpot.builtin_modules.ColumnSimpleImputer("numeric", strategy='mean'), tpot.builtin_modules.ColumnOneHotEncoder("categorical", min_frequency=0.001, handle_unknown="ignore"))
     X_train = preprocessing_pipeline.fit_transform(X_train_pre)
     X_train.index = X_train_pre.index
     y_train = pd.Series(y_train_pre, index=y_train_pre.index)
