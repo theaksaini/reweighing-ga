@@ -34,8 +34,14 @@ def compare_reweighting_methods(ml_models, experiments, task_id_lists, base_save
                     super_seed = (m+t+r+e)*1000
                     print("Super Seed : ", super_seed)
 
+                    if taskid.startswith('pmad_rus'):
+                        # Strip out 'rus' to load the correct dataset
+                        dataset_name = "pmad_" + taskid.split("_")[2]
+                    else:
+                        dataset_name = taskid
+                    
                     # Split the data into training_validation and testing sets
-                    X_train_val, y_train_val, X_test, y_test, features, sens_features = utils.load_task(data_dir, taskid, test_size=0.15, seed=r)
+                    X_train_val, y_train_val, X_test, y_test, features, sens_features = utils.load_task(data_dir, dataset_name, test_size=0.15, seed=r)
 
                     # Split the training set into training and validation sets
                     X_train, X_val, y_train, y_val = train_test_split(X_train_val, y_train_val, test_size=0.1765, stratify=y_train_val, random_state=r)

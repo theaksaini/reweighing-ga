@@ -60,6 +60,7 @@ def FNR(y_true, y_pred):
     return np.sum(1-y_pred[yt])/np.sum(yt)
 
 def subgroup_loss(y_true, y_pred, X_protected, metric):
+    # Closely resembles the code from https://github.com/cavalab/fomo/blob/main/fomo/metrics.py
     assert isinstance(X_protected, pd.DataFrame), "X should be a dataframe"
     if not isinstance(y_true, pd.Series):
         y_true = pd.Series(y_true, index=X_protected.index)
@@ -81,12 +82,11 @@ def subgroup_loss(y_true, y_pred, X_protected, metric):
     base_loss = loss_fn(y_true, y_pred)
     max_loss = 0.0
     for c, idx in categories.items():
-        pos_rate_grp = y_true.loc[idx].mean() 
         # for FPR and FNR, gamma is also conditioned on the outcome probability
         if metric=='FPR' or loss_fn == FPR: 
-            g = 1 - pos_rate_grp
+            g = 1 - g = 1 - np.sum(y_true.loc[idx])/len(X_protected)
         elif metric=='FNR' or loss_fn == FNR: 
-            g = pos_rate_grp
+            g = np.sum(y_true.loc[idx])/len(X_protected)
         else:
             g = len(idx) / len(X_protected)
 
@@ -272,7 +272,7 @@ def load_task(data_dir, dataset_name, test_size, seed, preprocess=True):
     
     with open(cached_data_path,'rb') as file:
         d = pd.read_pickle(file)
-    X, y, features, sens_features = d['X'], d['y'], d['features'], d['sens_features']
+    X, y, features, initial_sens_features = d['X'], d['y'], d['features'], d['sens_features']
     X.reset_index(drop=True, inplace=True)
     y.reset_index(drop=True, inplace=True)
 
@@ -291,7 +291,7 @@ def load_task(data_dir, dataset_name, test_size, seed, preprocess=True):
     
     features = X_train.columns
 
-    sens_features = [x for x in list(features) if ''.join(x.split("_")[:-1]) in sens_features] # one hot encoded features can be slighly different
+    sens_features = [col for col in features if any([col.startswith(phrase) for phrase in initial_sens_features])] # one hot encoded features can be slighly different
     print("All features", features)
     print("Sensitive features", sens_features)
 
