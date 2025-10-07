@@ -19,6 +19,7 @@ from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
 
 from fairlearn.metrics import demographic_parity_difference as dpd
+from typing import Iterator
 
 
 def FPR(y_true, y_pred):
@@ -84,7 +85,7 @@ def subgroup_loss(y_true, y_pred, X_protected, metric):
     for c, idx in categories.items():
         # for FPR and FNR, gamma is also conditioned on the outcome probability
         if metric=='FPR' or loss_fn == FPR: 
-            g = 1 - g = 1 - np.sum(y_true.loc[idx])/len(X_protected)
+            g = 1 - np.sum(y_true.loc[idx])/len(X_protected)
         elif metric=='FNR' or loss_fn == FNR: 
             g = np.sum(y_true.loc[idx])/len(X_protected)
         else:
@@ -125,7 +126,7 @@ def binary_to_decimal(list_of_nums):
     decimal_value = int(''.join(list_of_nums), 2)
     return decimal_value
 
-def partial_to_full_sample_weight(partial_weights, X, y, sens_features):
+def partial_to_full_sample_weight(partial_weights: np.ndarray, X, y, sens_features):
     assert y.index.equals(X.index), "Indices of y and sensitive_columns do not match."
     sensitive_columns = X.loc[:, sens_features]
     sensitive_columns['target'] = y
@@ -133,30 +134,46 @@ def partial_to_full_sample_weight(partial_weights, X, y, sens_features):
     all_indices = all_indices.to_numpy()
     return np.array(partial_weights[all_indices])
 
-def fitness_func_kfold(sample_weight, model, X, y, sens_features, f_metric, seed):
+def cross_val_scorer(sample_weight, skf: sklearn.model_selection.StratifiedKFold, model, X, y, sens_features, objective_functions):
     '''
-    model: fittend model or pipeline
-    X_prime: subset of X data frame contatining sensitive columns
+    model: fitted model or pipeline
+    sen_features: list of sensitive features
+    objective_functions: list of objective functions
     '''
-    sample_weights_full = partial_to_full_sample_weight(sample_weight, X, y, sens_features)
-
-    skf = StratifiedKFold(n_splits=10, random_state=seed, shuffle=True)
-
-    auroc = []
-    f_val = []
-    for train_index, test_index in skf.split(X, y):
+    if sample_weight is not None:
+        sample_weights_full = partial_to_full_sample_weight(sample_weight, X, y, sens_features)
+    
+    assert len(objective_functions) == 2, "Only two objective functions are supported this function."
+    obj0_vals = []
+    obj1_vals = []
+    cv_splits  = skf.split(X, y)
+    for train_index, test_index in cv_splits:
         X_train, X_test = X.iloc[train_index], X.iloc[test_index]
         y_train, y_test = y.iloc[train_index], y.iloc[test_index]
 
-        model.fit(sample_weight=sample_weights_full[train_index], X=X_train, y=y_train)
+        if sample_weight is not None:
+            model.fit(sample_weight=sample_weights_full[train_index], X=X_train, y=y_train)
+        else:
+            model.fit(X=X_train, y=y_train)
+        scores = evaluate_objective_functions(model, X_test, y_test, objective_functions, sens_features)
 
-        y_proba = model.predict_proba(X_test)[:,1]
-        X_prime = X_test.loc[:, sens_features]
-    
-        auroc.append(sklearn.metrics.get_scorer("roc_auc_ovr")(model, X_test, y_test))
-        f_val.append(f_metric(y_test, y_proba, X_prime, grouping = 'intersectional', abs_val = True, gamma = True))
+        obj0_vals.append(scores[objective_functions[0]])
+        obj1_vals.append(scores[objective_functions[1]])
 
-    return np.mean(auroc), np.mean(f_val)
+    assert len(obj0_vals) == skf.get_n_splits(X,y), "Number of folds do not match."
+    assert len(obj1_vals) == skf.get_n_splits(X,y), "Number of folds do not match."
+    return np.mean(obj0_vals), np.mean(obj1_vals)
+
+def fitness_func_kfold(sample_weight, skf: sklearn.model_selection.StratifiedKFold, model, X_train, y_train, sens_features, objective_functions, objective_functions_weights):
+    '''
+    model: fittend model or pipeline
+    sen_features: list of senstive features
+    objective_functions: list of objective functions
+    objective_functions_weights: list of weights for each objective function
+    '''
+    cv_scores = cross_val_scorer(sample_weight, skf, model, X_train, y_train, sens_features, objective_functions)
+    return cv_scores[0]*objective_functions_weights[0], cv_scores[1]*objective_functions_weights[1]
+
 
 def fitness_func_holdout(sample_weight, model, X_train, y_train, X_val, y_val, sens_features, objective_functions, objective_functions_weights):
     '''
@@ -173,43 +190,6 @@ def fitness_func_holdout(sample_weight, model, X_train, y_train, X_val, y_val, s
     scores = evaluate_objective_functions(model, X_val, y_val, objective_functions, sens_features)
 
     return [scores[objective_functions[i]]*objective_functions_weights[i] for i in range(len(objective_functions))]
-
-def learn_sel_fair_split(X, y, sens_features, seed, split_frac):
-    # Get unique combinations of Sensitive Features
-    partitions = X.groupby(sens_features)
-    
-    # Initialize an empty list to store the samples
-    X_select_dfs = []
-    X_learn_dfs  = []
-
-    # Loop through each partition and sample 
-    for _, partition in partitions:
-        # Sample the required percentage of the partition, with 'frac' controlling the fraction
-        select = partition.sample(frac=split_frac, random_state=seed)  # Using random_state for reproducibility
-        if select.empty:
-            partition.sample(n=1, random_state=seed)  # Select at least one observation from the group
-        learn = partition.drop(select.index)
-        X_select_dfs.append(select)
-        X_learn_dfs.append(learn)
-       
-    # Combine all sampled partitions into a single dataframe
-    X_select_df = pd.concat(X_select_dfs)
-    X_learn_df = pd.concat(X_learn_dfs)
-    
-    return X_learn_df, X_select_df, y.loc[X_learn_df.index], y.loc[X_select_df.index]
-
-
-def fitness_func_lexidate(sample_weight, model, X_learn, y_learn, X_select, y_select, sens_features):
-    '''
-    model: fittend model or pipeline
-    X_prime: subset of X data frame contatining sensitive columns
-    '''
-    sample_weights = partial_to_full_sample_weight(sample_weight, X_learn, y_learn, sens_features)
-    
-    model.fit(sample_weight=sample_weights, X=X_learn, y=y_learn)
-    y_pred = model.predict(X_select)
-
-    return (y_pred==y_select).astype(int).to_list()
 
 def calc_weights(X, y, sens_features_name):
     ''' Calculate sample weights according to calculationg given in 
