@@ -20,7 +20,7 @@ from sklearn.exceptions import NotFittedError
 
 from fairlearn.metrics import demographic_parity_difference as dpd
 from typing import Iterator
-
+from sklearn.base import clone 
 
 def FPR(y_true, y_pred):
     """Returns False Positive Rate.
@@ -148,14 +148,16 @@ def cross_val_scorer(sample_weight, skf: sklearn.model_selection.StratifiedKFold
     obj1_vals = []
     cv_splits  = skf.split(X, y)
     for train_index, test_index in cv_splits:
+        # use clone to create an unfitted copy of the model for this fold
+        est = clone(model)
         X_train, X_test = X.iloc[train_index], X.iloc[test_index]
         y_train, y_test = y.iloc[train_index], y.iloc[test_index]
 
         if sample_weight is not None:
-            model.fit(sample_weight=sample_weights_full[train_index], X=X_train, y=y_train)
+            est.fit(sample_weight=sample_weights_full[train_index], X=X_train, y=y_train)
         else:
-            model.fit(X=X_train, y=y_train)
-        scores = evaluate_objective_functions(model, X_test, y_test, objective_functions, sens_features)
+            est.fit(X=X_train, y=y_train)
+        scores = evaluate_objective_functions(est, X_test, y_test, objective_functions, sens_features)
 
         obj0_vals.append(scores[objective_functions[0]])
         obj1_vals.append(scores[objective_functions[1]])
